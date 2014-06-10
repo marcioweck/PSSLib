@@ -142,9 +142,12 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
             stree[b] = {a: d}
 
     for sid in seeds.keys():
-        adjnodes = stree[sid]
-        c = min(1.5*mu_dist, max(adjnodes, key=adjnodes.get))
-        seeds[sid] = (population[sid], c)
+        try:
+            adjnodes = stree[sid]
+            c = min(1.5*mu_dist, max(adjnodes, key=adjnodes.get))
+            seeds[sid] = (population[sid], c)
+        except:
+            seeds[sid] = (population[sid], mu_dist)
 
     if useDM and len(seeds) < nmin:
         # Random search
@@ -174,7 +177,7 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
                     seeds[dom.id] = (dom, d*0.6)
                 except:
                     pass
-            print l
+
             if len(seeds) >= nmin:
                 break
     return seeds.values(), edges
@@ -191,9 +194,15 @@ def generate(ind_init, hives):
     swarms = [h.generate(ind_init) for h in hives]
     return swarms
 
+
 def updateHive(hive, swarm):
     hive.update(swarm)
     return hive.shouldContinue()
+
+
+def generateHive(hclass, (xstart, sigma)):
+    return hclass(xstart, sigma)
+
 
 import sys
 sys.path.append("../benchmarks/niching-benchmark-cec2013/python/")
@@ -206,6 +215,7 @@ creator.create("Individual", array.array, typecode='d',
                fitness=creator.Fitness, distto=0.0, pid=-1)
 creator.create("Hive", cma.Strategy)
 
+
 def main():
 
     benchmark = pycec2013.Benchmark(4)
@@ -217,9 +227,14 @@ def main():
     toolbox.register("fdist", nearest_better_tree)
     toolbox.register("restart", seeds_selection, benchmark.evaluate,
                      creator.Individual)
+    toolbox.register("hive", generateHive, cma.Strategy)
+
 
     dim = benchmark.ndim
     nmin = benchmark.ngoptima
+    leftfes = benchmark.max_fes
+    ngoptima = 0
+    max_ngoptima = nmin
 
     dists = [stats.uniform for i in range(dim)]
 
@@ -233,37 +248,43 @@ def main():
     seeds, edges = seeds_selection(benchmark.evaluate,
                                    creator.Individual, samples, 10)
 
-    hives = [creator.Hive(seed) for seed in seeds]
-    
-    for i in xrange(nevals):
-        
+    hives = [toolbox.hive(seed) for seed in seeds]
+
+    while leftfes > 0  and ngoptima < max_ngoptima:
+
         swarms = toolbox.generate(hives)
         for swarm in swarms:
             fits = toolbox.feval(swarm)
             for ind, fit in izip(swarm, fits):
-                ind.fitness.values = (fit,)
-        
+                ind.fitness.values = (fit,0)
+
         centroids = [hive.centroid for hive in hives]
-    
+        cfit = toolbox.feval(centroids)
+        leftfes -= len(swarms)*len(swarms[0]) + len(centroids)
+
+        ngoptima = benchmark.count_goptima(centroids, cfit, 1e-5)
+
         checks = toolbox.update(hives, swarms)
 
         nextgen = [hive for ok, hive in izip(checks, hives) if ok]
-        
+
         del hives[:]
         hives = nextgen
 
         if len(hives) < nmin:
+            print "more"
             samples = samples(dists, (min_, max_), dim, 10*(len(hives)-nmin))
 
             comp = np.concatenate((samples, centroids))
 
             seeds, edges = toolbox.register(comp, nmin)
-            
-            hives.extend((creator.Hive(s) for s in seeds
-                          if s.id < len(samples)))        
-        
 
-def plotseeds(feval, min_, max_, samples, edges, seeds):
+            hives.extend((toolbox.hive(s) for s in seeds
+                          if s.id < len(samples)))
+
+    plotseeds(benchmark.evaluate, min_, max_, samples=centroids)
+
+def plotseeds(feval, min_, max_, samples=None, edges=None, seeds=None):
     fig, ax = plt.subplots()
     X = np.arange(min_, max_, 0.01)
     Y = np.arange(min_, max_, 0.01)
@@ -272,17 +293,23 @@ def plotseeds(feval, min_, max_, samples, edges, seeds):
     Z = np.array(map(feval, PTS), copy=True)
     Z = Z.reshape(X.shape)
     plt.contour(X, Y, Z, zdir='z', cmap=cm.jet, offset=np.min(Z))
-    mudist = np.mean([d for _,d in edges])
-    for (x, y), d in edges:
-        if d < 2*mudist and d > 0:
-            plt.plot([samples[x,0], samples[y,0]], [samples[x,1], samples[y,1]], 'k')
+    if edges is not None:
+        mudist = np.mean([d for _, d in edges])
+        for (x, y), d in edges:
+            if d < 2*mudist and d > 0:
+                plt.plot([samples[x, 0], samples[y, 0]],
+                         [samples[x, 1], samples[y, 1]], 'k')
 
-    plt.scatter(samples[:, 0], samples[:, 1], c='r', s=100)
-    for x, r in seeds:
-        c = mpatches.Circle(x, r, alpha=0.6, fc="b", ec="b", lw=1)
-        ax.add_patch(c)
+    if samples is not None:
+        sarr = np.array(samples)
+        plt.scatter(sarr[:, 0], sarr[:, 1], c='r', s=100)
+
+    if seeds is not None:
+        for x, r in seeds: 
+            c = mpatches.Circle(x, r, alpha=0.6, fc="b", ec="b", lw=1)
+            ax.add_patch(c)
     
     plt.show()
 
 if __name__ == "__main__":
-    main(pycec2013.Benchmark(4))
+    main()

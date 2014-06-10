@@ -103,7 +103,7 @@ class Strategy(object):
         self.update_count = 0
         self.computeParams(self.params)
 
-        self.sel_pop = numpy.zeros((self.dim, self.mu))
+        self.sel_pop = numpy.zeros((self.mu, self.dim))
         
     def generate(self, ind_init):
         """Generate a population of :math:`\lambda` individuals of type
@@ -145,7 +145,7 @@ class Strategy(object):
         
         # Update covariance matrix
         artmp = self.sel_pop - old_centroid
-        self.updateCovarianceMatrix(artmp)
+        self.updateCovarianceMatrix(artmp, hsig)
         
         self.sigma *= numpy.exp((numpy.linalg.norm(self.ps) / self.chiN - 1.) \
                                 * self.cs / self.damps)
@@ -159,7 +159,7 @@ class Strategy(object):
              * numpy.dot(self.B, (1. / self.diagD) \
                           * numpy.dot(self.B.T, c_diff))
 
-    def updateCovarianceMatrix(self, artmp):
+    def updateCovarianceMatrix(self, artmp, hsig):
         self.C = (1 - self.ccov1 - self.ccovmu + (1 - hsig) \
                    * self.ccov1 * self.cc * (2 - self.cc)) * self.C \
                 + self.ccov1 * numpy.outer(self.pc, self.pc) \
@@ -210,7 +210,10 @@ class Strategy(object):
                                             (self.dim + 1.)) - 1.) + self.cs
         self.damps = params.get("damps", self.damps)
 
-        
+    def shouldContinue(self):
+        return True
+
+
 class StrategyOnePlusLambda(object):
     """
     A CMA-ES strategy that uses the :math:`1 + \lambda` paradigme.
