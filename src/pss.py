@@ -1,7 +1,7 @@
 # TODO license
 # TODO explain
 
-from itertools import izip
+from itertools import izip, combinations
 
 import numpy as np
 
@@ -109,17 +109,17 @@ def determine_edges(population, fitness):
     # nearest_better_tree select using maximization
     return nearest_better_tree(D, fitness)
 
+
 import pdb
 
-def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
+
+def seeds_selection(feval, population, nmin, useDM=True):
     # dim = bench.ndim
 #    pdb.set_trace()
-    fitnesses = [feval(np.array(x)) for x in samples]
-    edges = determine_edges(samples, fitnesses)
+    fitnesses = [x.fitness for x in population]
+    edges = determine_edges(population, fitnesses)
     dists = np.array([d for _, d in edges])
     idxs = np.arange(0, len(dists))
-
-    population = [ind_init(x) for x in samples]
 
     assign_fitness(population, fitnesses, dists)
 
@@ -128,7 +128,7 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
     seeds = dict()
     # Select the main seeds
     mask = ((dists >= 2.*mu_dist) + (dists == 0))
-    print mask
+
     sidxs = idxs[mask]
     for i in sidxs:
         population[i].id = i
@@ -151,10 +151,6 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
 
     if useDM and len(seeds) < nmin:
         # Random search
-        # adjnodes = {id: list() for id in idxs}
-        # for i in idxs[dists < 2*mu_dist]:
-        #     xy, _ = edges[i]
-        #     adjnodes[xy[1]].append(xy[0])
         interior_pts = dm.inline_geom_sampler(5)
 
         sidxs = idxs[-mask]
@@ -164,13 +160,13 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
             ind = population[xy[0]]
             dom = population[xy[1]]
             wps = dm.denorm(ind, dom, interior_pts)
-            wpfit = np.array(map(feval, wps))
+            wpfit = map(feval, wps)
             #print "--------"
             #print ind.fitness
             #print dom.fitness
             #print wpfit
             #print "--------"
-            if len(wpfit[wpfit < ind.fitness.wvalues[0]]) > 0:
+            if any(wpfit < ind.fitness.wvalues[0]):
                 ind.id = xy[0]
                 seeds[ind.id] = (ind, d*0.6)
                 try:
@@ -180,15 +176,64 @@ def seeds_selection(feval, ind_init, samples, nmin, useDM=True):
 
             if len(seeds) >= nmin:
                 break
-    return seeds.values(), edges
+    return seeds.values(), edges, population
 
 
-def detect_overlaps():
-    pass
+def check_overlap(a, b, dist, waypts):
+    c1 = a.radius
+    c2 = b.radius
+
+    weakx = a if a.fitness < b.fitness else b
+    wps = dm.denorm(a, b, waypts)
+    wpfit = map(feval, wps)
+
+    status = 0
+    if c1 > dist:
+        if a.fitness < b.fitness:
+            pass # Reduce a.hive.sigma
+        else:
+            if all(wpfit > b.fitness.wvalues[0]):
+                return 2 # remove b
+            
+    if c2 > dist:
+        if b.fitness < a.fitness:
+            pass # Reduce b.hive.sigma
+        else:
+            if all(wpfit > a.fitness.wvalues[0]):
+                return 1 # remove a
+
+    return status
+ 
 
 
-def remove_overlaps():
-    pass
+def remove_overlaps(individuals, D, hives, ntests=1):
+    dim = len(individuals[0])
+    snorm = np.sqrt(dim)
+
+    cs = [h.sigma * snorm for h in hives]
+    for i, ind in enumerate(individuals):
+        ind.radius = cs[i]
+        ind.hive = hives[i]
+        ind.cpos = i
+
+    in_grads = dm.inline_geom_sampler(ntests)
+
+    A = np.zeros(D.shape)
+    for i, j in combinations(range(len(individuals)), 2):
+         s = check_overlap(individuals[i], individuals[j], (cs[i], cs[j])
+                      D[i,j], internal_grads)
+         A[i,j] = s
+
+    new_hives = list()
+    selgrp = tools.selTournament(individuals, 0.5*len(individuals), 2)
+
+    for a, b in combinations(selgrp):
+        s = check_overlap(a, b, D[a.cpos,b.cpos], in_grads)
+        if s != 1:
+            new_hives.append(a.hive)
+        if s != 2:
+            new_hives.append(b.hive)
+
 
 def generate(ind_init, hives):
     swarms = [h.generate(ind_init) for h in hives]
@@ -212,7 +257,7 @@ import cma
 
 creator.create("Fitness", base.Fitness, weights=(1.0, 1.0))
 creator.create("Individual", array.array, typecode='d',
-               fitness=creator.Fitness, distto=0.0, pid=-1)
+               fitness=creator.Fitness, cpos=-1, radius=0, hive=None)
 creator.create("Hive", cma.Strategy)
 
 
@@ -245,8 +290,10 @@ def main():
 
     samples = sampler(dists, (min_, max_), dim, 20*dim)
 
+    population = [creator.Individual(x) for x in samples]
+
     seeds, edges = seeds_selection(benchmark.evaluate,
-                                   creator.Individual, samples, 10)
+                                    population, 10)
 
     hives = [toolbox.hive(seed) for seed in seeds]
 
@@ -258,8 +305,13 @@ def main():
             for ind, fit in izip(swarm, fits):
                 ind.fitness.values = (fit,0)
 
-        centroids = [hive.centroid for hive in hives]
+        xstarts = (hive.centroid for hive in hives)
+        centroids = [creator.Individual(x) for x in xstarts]
+
         cfit = toolbox.feval(centroids)
+        for ind, fit in izip(centroids, cfit):
+            centroids.fitness.values = (cfit, 0)
+
         leftfes -= len(swarms)*len(swarms[0]) + len(centroids)
 
         ngoptima = benchmark.count_goptima(centroids, cfit, 1e-5)
@@ -268,19 +320,24 @@ def main():
 
         nextgen = [hive for ok, hive in izip(checks, hives) if ok]
 
+        nextgen = remove_overlaps()
+
         del hives[:]
         hives = nextgen
 
         if len(hives) < nmin:
             print "more"
-            samples = samples(dists, (min_, max_), dim, 10*(len(hives)-nmin))
+            samples = sampler(dists, (min_, max_), dim, 10*(len(hives)-nmin))
 
             comp = np.concatenate((samples, centroids))
 
-            seeds, edges = toolbox.register(comp, nmin)
+            seeds, _, _ = toolbox.restart(comp, nmin)
 
             hives.extend((toolbox.hive(s) for s in seeds
                           if s.id < len(samples)))
+
+
+
 
     plotseeds(benchmark.evaluate, min_, max_, samples=centroids)
 
