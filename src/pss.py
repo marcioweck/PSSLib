@@ -22,6 +22,7 @@ from deap import tools
 
 import dm
 import lhs
+import nbcdm
 
 """
 Utils
@@ -113,15 +114,10 @@ def determine_edges(population, fitness):
 import pdb
 
 
-def seeds_selection(feval, population, nmin, useDM=True):
+def seeds_selection(feval, population, dists, nmin, useDM=True):
     # dim = bench.ndim
 #    pdb.set_trace()
-    fitnesses = [x.fitness for x in population]
-    edges = determine_edges(population, fitnesses)
-    dists = np.array([d for _, d in edges])
     idxs = np.arange(0, len(dists))
-
-    assign_fitness(population, fitnesses, dists)
 
     mu_dist = np.mean(dists)
 
@@ -218,12 +214,6 @@ def remove_overlaps(individuals, D, hives, ntests=1):
 
     in_grads = dm.inline_geom_sampler(ntests)
 
-    A = np.zeros(D.shape)
-    for i, j in combinations(range(len(individuals)), 2):
-         s = check_overlap(individuals[i], individuals[j], (cs[i], cs[j])
-                      D[i,j], internal_grads)
-         A[i,j] = s
-
     new_hives = list()
     selgrp = tools.selTournament(individuals, 0.5*len(individuals), 2)
 
@@ -281,19 +271,26 @@ def main():
     ngoptima = 0
     max_ngoptima = nmin
 
-    dists = [stats.uniform for i in range(dim)]
+    distribs = [stats.uniform for i in range(dim)]
 
     lbounds = tuple(benchmark.get_lbounds())
     ubounds = tuple(benchmark.get_ubounds())
     min_ = min(lbounds)
     max_ = max(ubounds)
 
-    samples = sampler(dists, (min_, max_), dim, 20*dim)
+    samples = sampler(distribs, (min_, max_), dim, 20*dim)
 
-    population = [creator.Individual(x) for x in samples]
+    nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
+    # population = [creator.Individual(x) for x in samples]
+    # fitnesses = toolbox.feval(population)
 
-    seeds, edges = seeds_selection(benchmark.evaluate,
-                                    population, 10)
+    # edges = determine_edges(population, fitnesses)
+    # dists = np.array([d for _, d in edges])
+
+    # assign_fitness(population, fitnesses, dists)
+
+    # seeds, edges = seeds_selection(benchmark.evaluate,
+    #                                 population, edges, dists, 10)
 
     hives = [toolbox.hive(seed) for seed in seeds]
 
@@ -305,12 +302,18 @@ def main():
             for ind, fit in izip(swarm, fits):
                 ind.fitness.values = (fit,0)
 
+        ## Evaluate centroids
+        ##
         xstarts = (hive.centroid for hive in hives)
         centroids = [creator.Individual(x) for x in xstarts]
-
         cfit = toolbox.feval(centroids)
-        for ind, fit in izip(centroids, cfit):
-            centroids.fitness.values = (cfit, 0)
+
+        edges = determine_edges(centroids, cfit)
+        dists = np.array([d for _, d in edges])
+  
+        assign_fitness(centroids, cfit, dists)
+
+        ###
 
         leftfes -= len(swarms)*len(swarms[0]) + len(centroids)
 
@@ -328,6 +331,7 @@ def main():
         if len(hives) < nmin:
             print "more"
             samples = sampler(dists, (min_, max_), dim, 10*(len(hives)-nmin))
+
 
             comp = np.concatenate((samples, centroids))
 
