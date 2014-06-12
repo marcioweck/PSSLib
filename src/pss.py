@@ -198,8 +198,7 @@ def check_overlap(a, b, dist, waypts):
             if all(wpfit > a.fitness.wvalues[0]):
                 return 1 # remove a
 
-    return status
- 
+    return status 
 
 
 def remove_overlaps(individuals, D, hives, ntests=1):
@@ -280,19 +279,14 @@ def main():
 
     samples = sampler(distribs, (min_, max_), dim, 20*dim)
 
-    nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
-    # population = [creator.Individual(x) for x in samples]
-    # fitnesses = toolbox.feval(population)
+    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
 
-    # edges = determine_edges(population, fitnesses)
-    # dists = np.array([d for _, d in edges])
-
-    # assign_fitness(population, fitnesses, dists)
-
-    # seeds, edges = seeds_selection(benchmark.evaluate,
-    #                                 population, edges, dists, 10)
-
-    hives = [toolbox.hive(seed) for seed in seeds]
+    hives = list()
+    norm = float(np.sqrt(dim))
+    for (xstart, c, (f1, f2)) in seeds:
+        ind = creator.Individual(xstart)
+        ind.fitnesses.values = (f1, f2)
+        hives.append(toolbox.hive((ind, c/norm)))
 
     while leftfes > 0  and ngoptima < max_ngoptima:
 

@@ -50,31 +50,26 @@ def nbtree(population, fitnesses):
     return nearest_better_tree(D, fitnesses)
 
 
-def dm_plugin(population, edges, seeds, mask):
+def dm_plugin(feval, fitnesses, population, edges, seeds, mask, nmin):
+    global _idxs
     # Random search
     interior_pts = dm.inline_geom_sampler(5)
 
-    sidxs = _idxs[-mask]
+    sidxs = _idxs[mask]
     shuffled = random.sample(sidxs, len(sidxs))
     for l in shuffled:
         xy, d = edges[l]
         ind = population[xy[0]]
         dom = population[xy[1]]
         wps = dm.denorm(ind, dom, interior_pts)
-        wpfit = map(feval, wps)
+        wpfit = np.array(map(feval, wps))
         #print "--------"
         #print ind.fitness
         #print dom.fitness
         #print wpfit
         #print "--------"
-        if any(wpfit < ind.fitness.wvalues[0]):
+        if any(wpfit < fitnesses[xy[1]]):
             yield xy, d
-            # ind.id = xy[0]
-            # seeds[xy[0]] = (ind, d*0.6)
-            # if xy[1] in seeds:
-            #    seeds[xy[1]] = (dom, d*0.6)
-            # else
-            #     pass 
 
         if len(seeds) >= nmin:
                 break
@@ -98,8 +93,10 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
 
     TODO explain parameters
     """
+    global _idxs
+    _idxs = np.arange(0, len(individuals))
 
-    fitnesses = [feval(x) for x in individuals]
+    fitnesses = [feval(np.array(x)) for x in individuals]
     edges = nbtree(individuals, fitnesses)
 
     stree = adj_tree_plugin(edges)
@@ -113,7 +110,7 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
     mask = ((dists >= 2.*mu_dist) + (dists == 0))
 
     sidxs = _idxs[mask]
-    for i in sidxs:
+    for sid in sidxs:
         try:
             adjnodes = stree[sid]
             c = min(1.5*mu_dist, max(adjnodes, key=adjnodes.get))
@@ -122,7 +119,7 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
             seeds[sid] = (individuals[sid], mu_dist, (fitnesses[sid], dists[sid]))
 
     if useDM and len(seeds) < nmin:
-        for (i,j), d in dm_plugin(individuals, edges, seeds, mask):
+        for (i,j), d in dm_plugin(feval, fitnesses, individuals, edges, seeds, -mask, nmin):
             seeds[i] = (individuals[i], 0.6*d, (fitnesses[i], d))
             if j in seeds:
                 seeds[j] = (individuals[j], 0.6*d, (fitnesses[j], dists[j]))
