@@ -1,13 +1,14 @@
 # TODO license
 # TODO explain
 
-from itertools import izip, combinations
-
-import numpy as np
-
 import array
 import random
 import copy
+
+from itertools import izip, combinations, chain
+from itertools import permutations as permut
+
+import numpy as np
 
 from scipy.spatial.distance import euclidean, pdist, squareform
 import scipy.stats as stats
@@ -23,6 +24,7 @@ from deap import tools
 import dm
 import lhs
 import nbcdm
+from archive import Archive
 
 """
 Utils
@@ -39,6 +41,9 @@ def sampler(dist_engine, xbounds, dim, n, convert=False):
         else:
             samples = map(creator.Individual, P)
         return samples
+    else:
+        if dim == 1:
+            P = np.array([np.array((x,)) for x in P])
 
     return P
 
@@ -47,16 +52,16 @@ def ensure_bounds(lbounds, ubounds):
     rand_ = random.random
     def decorator(func):
         def wrappper(*args, **kargs):
-            pop = func(*args, **kargs)
-            for ind in pop:
-                for i in range(len(ind)):
-                    if ind[i] > ubounds[i]:
-                        ind[i] = ubounds[i]*1.05 if rand_() > 0.8 \
-                                                    else ubounds[i]*0.9
-                    elif ind[i] < lbounds[i]:
-                        ind[i] = lbounds[i]*1.05 if rand_() > 0.8 \
-                                                    else lbounds[i]*0.9
-            return pop
+            populations = func(*args, **kargs)
+            for pop in populations:
+                for ind in pop:
+                    for i in range(len(ind)):
+                        if ind[i] > ubounds[i]:
+                            ind[i] = ubounds[i]
+
+                        elif ind[i] < lbounds[i]:
+                            ind[i] = lbounds[i]
+            return populations
         return wrappper
     return decorator
 
@@ -98,130 +103,34 @@ def nearest_better_tree(X, fitness, copy_X=False, marker=0.0):
 PSS framework
 """
 
-def assign_fitness(population, origFit, distFit):
-    for ind, ofit, dfit in izip(population, origFit, distFit):
-        ind.fitness.values = (ofit, dfit)
-
-
-def determine_edges(population, fitness):
-    D = squareform(pdist(population))
-    # TODO falta remover os colegas
-    # take care here, these fitnesses are raw numbers not controlled by deap
-    # nearest_better_tree select using maximization
-    return nearest_better_tree(D, fitness)
-
-
 import pdb
 
 
-def seeds_selection(feval, population, dists, nmin, useDM=True):
-    # dim = bench.ndim
-#    pdb.set_trace()
-    idxs = np.arange(0, len(dists))
+def remove_overlaps(feval, individuals, hives):
 
-    mu_dist = np.mean(dists)
+    if len(individuals) == 0: return []
 
-    seeds = dict()
-    # Select the main seeds
-    mask = ((dists >= 2.*mu_dist) + (dists == 0))
+    idx = range(0, len(hives))
+    idx.sort(key=lambda i: individuals[i].fitness)
 
-    sidxs = idxs[mask]
-    for i in sidxs:
-        population[i].id = i
-        seeds[i] = (population[i], 0)
+    nm = np.sqrt(len(individuals[0]))
+    
+    covs = [h.sigma*nm for h in hives]
 
-    stree = dict()
-    for (a, b), d in edges:
-        if b in stree:
-            stree[b][a] = d
-        else:
-            stree[b] = {a: d}
+    D = squareform(pdist(individuals))
 
-    for sid in seeds.keys():
-        try:
-            adjnodes = stree[sid]
-            c = min(1.5*mu_dist, max(adjnodes, key=adjnodes.get))
-            seeds[sid] = (population[sid], c)
-        except:
-            seeds[sid] = (population[sid], mu_dist)
+    uniques = set(idx[:])
 
-    if useDM and len(seeds) < nmin:
-        # Random search
-        interior_pts = dm.inline_geom_sampler(5)
+    for i, j in permut(idx, 2):
+        if covs[i] > D[i,j]:
+            if individuals[i].fitness > individuals[j].fitness:
+                wps = dm.denorm(individuals[i], individuals[j], [0.5])
+                wpfit = np.array(map(feval, wps))
+                if all(wpfit >= individuals[j].fitness.wvalues[0]):
+                    D[j,...] = np.inf
+                    uniques.discard(j)
 
-        sidxs = idxs[-mask]
-        shuffled = random.sample(sidxs, len(sidxs))
-        for l in shuffled:
-            xy, d = edges[l]
-            ind = population[xy[0]]
-            dom = population[xy[1]]
-            wps = dm.denorm(ind, dom, interior_pts)
-            wpfit = map(feval, wps)
-            #print "--------"
-            #print ind.fitness
-            #print dom.fitness
-            #print wpfit
-            #print "--------"
-            if any(wpfit < ind.fitness.wvalues[0]):
-                ind.id = xy[0]
-                seeds[ind.id] = (ind, d*0.6)
-                try:
-                    seeds[dom.id] = (dom, d*0.6)
-                except:
-                    pass
-
-            if len(seeds) >= nmin:
-                break
-    return seeds.values(), edges, population
-
-
-def check_overlap(a, b, dist, waypts):
-    c1 = a.radius
-    c2 = b.radius
-
-    weakx = a if a.fitness < b.fitness else b
-    wps = dm.denorm(a, b, waypts)
-    wpfit = map(feval, wps)
-
-    status = 0
-    if c1 > dist:
-        if a.fitness < b.fitness:
-            pass # Reduce a.hive.sigma
-        else:
-            if all(wpfit > b.fitness.wvalues[0]):
-                return 2 # remove b
-            
-    if c2 > dist:
-        if b.fitness < a.fitness:
-            pass # Reduce b.hive.sigma
-        else:
-            if all(wpfit > a.fitness.wvalues[0]):
-                return 1 # remove a
-
-    return status 
-
-
-def remove_overlaps(individuals, D, hives, ntests=1):
-    dim = len(individuals[0])
-    snorm = np.sqrt(dim)
-
-    cs = [h.sigma * snorm for h in hives]
-    for i, ind in enumerate(individuals):
-        ind.radius = cs[i]
-        ind.hive = hives[i]
-        ind.cpos = i
-
-    in_grads = dm.inline_geom_sampler(ntests)
-
-    new_hives = list()
-    selgrp = tools.selTournament(individuals, 0.5*len(individuals), 2)
-
-    for a, b in combinations(selgrp):
-        s = check_overlap(a, b, D[a.cpos,b.cpos], in_grads)
-        if s != 1:
-            new_hives.append(a.hive)
-        if s != 2:
-            new_hives.append(b.hive)
+    return (i for i in uniques)
 
 
 def generate(ind_init, hives):
@@ -235,7 +144,7 @@ def updateHive(hive, swarm):
 
 
 def generateHive(hclass, (xstart, sigma)):
-    return hclass(xstart, sigma)
+    return hclass(copy.deepcopy(xstart), sigma)
 
 
 import sys
@@ -245,124 +154,165 @@ from framework import pycec2013
 import cma
 
 creator.create("Fitness", base.Fitness, weights=(1.0, 1.0))
-creator.create("Individual", array.array, typecode='d',
-               fitness=creator.Fitness, cpos=-1, radius=0, hive=None)
+creator.create("OneFitness", base.Fitness, weights=(1.0,))
+creator.create("Individual", array.array, typecode='d', fitness=creator.Fitness)
+creator.create("Centroid", array.array, typecode='d', fitness=creator.OneFitness)
 creator.create("Hive", cma.Strategy)
 
 
 def main():
 
-    benchmark = pycec2013.Benchmark(4)
-
-    toolbox = base.Toolbox()
-    toolbox.register("generate", generate, creator.Individual)
-    toolbox.register("update", map, updateHive)
-    toolbox.register("feval", map, benchmark.evaluate)
-    toolbox.register("fdist", nearest_better_tree)
-    toolbox.register("restart", seeds_selection, benchmark.evaluate,
-                     creator.Individual)
-    toolbox.register("hive", generateHive, cma.Strategy)
-
-
-    dim = benchmark.ndim
-    nmin = benchmark.ngoptima
-    leftfes = benchmark.max_fes
-    ngoptima = 0
-    max_ngoptima = nmin
-
-    distribs = [stats.uniform for i in range(dim)]
+    benchmark = pycec2013.Benchmark(10)
 
     lbounds = tuple(benchmark.get_lbounds())
     ubounds = tuple(benchmark.get_ubounds())
     min_ = min(lbounds)
     max_ = max(ubounds)
 
+    toolbox = base.Toolbox()
+    toolbox.register("generate", generate, creator.Individual)
+    toolbox.register("update", map, updateHive)
+    toolbox.register("feval", map, benchmark.evaluate)
+    toolbox.register("fdist", nearest_better_tree)
+    toolbox.register("hive", generateHive, cma.Strategy)
+    toolbox.register("bounds", ensure_bounds(lbounds, ubounds))
+    toolbox.decorate("generate", toolbox.bounds)
+
+    dim = benchmark.ndim
+    nmin = benchmark.ngoptima
+    leftfes = benchmark.max_fes
+    ngoptima = 0
+    max_ngoptima = benchmark.ngoptima
+
+    def similarity_func(a, b):
+        if np.isnan(np.sum(a)) or np.isnan(np.sum(b)): 
+            pdb.set_trace()
+
+        d = euclidean(a, b)
+        return d < 0.06
+    
+    hof = Archive(max_ngoptima, similarity_func)
+
+    distribs = [stats.uniform for i in range(dim)]
+
     samples = sampler(distribs, (min_, max_), dim, 20*dim)
 
-    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
+    #samples = np.loadtxt("/home/weckwar/inputs.txt", delimiter=',', ndmin=2)
+
+    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10, useDM=False)
+    # tosave = np.array( [(x, c) for x,c,_ in seeds])
+    # np.savetxt("/home/weckwar/inputs.txt", tosave, delimiter=',')
+    # plotseeds(benchmark.evaluate, min_, max_, dim, seeds=seeds)
+    # return 
 
     hives = list()
     norm = float(np.sqrt(dim))
     for (xstart, c, (f1, f2)) in seeds:
         ind = creator.Individual(xstart)
-        ind.fitnesses.values = (f1, f2)
+        ind.fitness.values = (f1, f2)
         hives.append(toolbox.hive((ind, c/norm)))
 
     while leftfes > 0  and ngoptima < max_ngoptima:
 
         swarms = toolbox.generate(hives)
-        for swarm in swarms:
-            fits = toolbox.feval(swarm)
-            for ind, fit in izip(swarm, fits):
-                ind.fitness.values = (fit,0)
+        
+        blob = list(chain(*swarms))
+        D = squareform(pdist(blob))
+        fitnesses = toolbox.feval(blob)
 
-        ## Evaluate centroids
-        ##
-        xstarts = (hive.centroid for hive in hives)
-        centroids = [creator.Individual(x) for x in xstarts]
-        cfit = toolbox.feval(centroids)
-
-        edges = determine_edges(centroids, cfit)
-        dists = np.array([d for _, d in edges])
-  
-        assign_fitness(centroids, cfit, dists)
-
-        ###
-
-        leftfes -= len(swarms)*len(swarms[0]) + len(centroids)
-
-        ngoptima = benchmark.count_goptima(centroids, cfit, 1e-5)
+        nelem = len(swarms[0])
+        for i, swarm in enumerate(swarms):
+            k = i*nelem
+            nbidx = np.arange(k, k+nelem)
+            for j, ind in enumerate(swarm):
+                D[k+j,nbidx] = np.inf                
+                sortedline = np.argsort(D[k+j,:])
+                bestidx = next((l for l in sortedline
+                                if fitnesses[l] > fitnesses[k+j]), -1)
+                
+                ind.fitness.values = (fitnesses[k+j], D[k+j, bestidx])
 
         checks = toolbox.update(hives, swarms)
 
-        nextgen = [hive for ok, hive in izip(checks, hives) if ok]
+        nextgen = [hives[i] for i, ok in enumerate(checks) if ok]
 
-        nextgen = remove_overlaps()
+        xstarts = [creator.Centroid(x.centroid) for x in nextgen]
+        cfit = toolbox.feval(xstarts)
+        for x, fit in izip(xstarts, cfit):
+            x.fitness.values = (fit,)
 
-        del hives[:]
-        hives = nextgen
+        uniques = list(remove_overlaps(benchmark.evaluate, xstarts, nextgen))
+        hives = [nextgen[i] for i in uniques]
+        xstarts = [xstarts[i]  for i in uniques]
+        # cfit = [cfit[i] for i in uniques]
 
+        hof.update(xstarts)
+        hfit = [x.fitness.values[0] for x in hof]
+
+        ngoptima = benchmark.count_goptima(hof, hfit, 1e-5)
+        
         if len(hives) < nmin:
-            print "more"
-            samples = sampler(dists, (min_, max_), dim, 10*(len(hives)-nmin))
+            print "entered"
+            samples = sampler(distribs, (min_, max_), dim, 20*dim)
 
+            seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
 
-            comp = np.concatenate((samples, centroids))
+            for (xstart, c, (f1, f2)) in seeds:
+                ind = creator.Individual(xstart)
+                ind.fitness.values = (f1, f2)
+                hives.append(toolbox.hive((ind, 0.5*c/norm)))
 
-            seeds, _, _ = toolbox.restart(comp, nmin)
+            leftfes -= len(samples)
 
-            hives.extend((toolbox.hive(s) for s in seeds
-                          if s.id < len(samples)))
+        leftfes -= len(swarms)*nelem + len(xstarts)      
 
+    print "Used FEs: {0}".format(benchmark.max_fes - leftfes)
+    print ngoptima
+    for ind in hof:
+        print "x: {0} -> {1}".format(ind, ind.fitness.values[0])
+    plotseeds(benchmark.evaluate, min_, max_, dim, samples=hof)
+   
 
-
-
-    plotseeds(benchmark.evaluate, min_, max_, samples=centroids)
-
-def plotseeds(feval, min_, max_, samples=None, edges=None, seeds=None):
+def plotseeds(feval, min_, max_, dim, samples=None, edges=None, seeds=None):
     fig, ax = plt.subplots()
-    X = np.arange(min_, max_, 0.01)
-    Y = np.arange(min_, max_, 0.01)
-    X, Y = np.meshgrid(X, Y)
-    PTS = np.hstack((X.reshape(X.size, 1), Y.reshape(Y.size, 1)))
-    Z = np.array(map(feval, PTS), copy=True)
-    Z = Z.reshape(X.shape)
-    plt.contour(X, Y, Z, zdir='z', cmap=cm.jet, offset=np.min(Z))
-    if edges is not None:
-        mudist = np.mean([d for _, d in edges])
-        for (x, y), d in edges:
-            if d < 2*mudist and d > 0:
-                plt.plot([samples[x, 0], samples[y, 0]],
-                         [samples[x, 1], samples[y, 1]], 'k')
 
-    if samples is not None:
-        sarr = np.array(samples)
-        plt.scatter(sarr[:, 0], sarr[:, 1], c='r', s=100)
+    if dim == 2:
+        X = np.arange(min_, max_, 0.05)
+        Y = np.arange(min_, max_, 0.05)
+        X, Y = np.meshgrid(X, Y)
+        PTS = np.hstack((X.reshape(X.size, 1), Y.reshape(Y.size, 1)))
+        Z = np.array(map(feval, PTS), copy=True)
+        Z = Z.reshape(X.shape)
+        plt.contour(X, Y, Z, zdir='z', cmap=cm.jet, offset=np.min(Z))
+        if edges is not None:
+            mudist = np.mean([d for _, d in edges])
+            for (x, y), d in edges:
+                if d < 2*mudist and d > 0:
+                    plt.plot([samples[x, 0], samples[y, 0]],
+                             [samples[x, 1], samples[y, 1]], 'k')
 
-    if seeds is not None:
-        for x, r in seeds: 
-            c = mpatches.Circle(x, r, alpha=0.6, fc="b", ec="b", lw=1)
-            ax.add_patch(c)
+        if samples is not None:
+            sarr = np.array(samples)
+            plt.scatter(sarr[:, 0], sarr[:, 1], c='r', s=100)
+
+        if seeds is not None:
+            for x, r in seeds: 
+                c = mpatches.Circle(x, r, alpha=0.6, fc="b", ec="b", lw=1)
+                ax.add_patch(c)
+
+    if dim == 1:
+        X = np.arange(min_, max_, 0.01)
+        Y = [feval(x) for x in X]
+        plt.plot(X,Y,'r')
+
+        if samples is not None:
+            F = [s.fitness.values[0] for s in samples]
+            plt.scatter(samples, F, c='k', s = 10)
+
+        if seeds is not None:
+            for x, r, _ in seeds:
+                c = mpatches.Circle((x, feval(x)), r, alpha=0.6, fc="b", ec="b", lw=1)
+                ax.add_patch(c)
     
     plt.show()
 

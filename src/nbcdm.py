@@ -45,8 +45,6 @@ def nearest_better_tree(X, fitness, copy_X=False, marker=0.0):
 
 def nbtree(population, fitnesses):
     D = squareform(pdist(population))
-    # TODO falta remover os colegas
-
     return nearest_better_tree(D, fitnesses)
 
 
@@ -63,11 +61,7 @@ def dm_plugin(feval, fitnesses, population, edges, seeds, mask, nmin):
         dom = population[xy[1]]
         wps = dm.denorm(ind, dom, interior_pts)
         wpfit = np.array(map(feval, wps))
-        #print "--------"
-        #print ind.fitness
-        #print dom.fitness
-        #print wpfit
-        #print "--------"
+
         if any(wpfit < fitnesses[xy[1]]):
             yield xy, d
 
@@ -113,7 +107,7 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
     for sid in sidxs:
         try:
             adjnodes = stree[sid]
-            c = min(1.5*mu_dist, max(adjnodes, key=adjnodes.get))
+            c = min(1.8*mu_dist, max(adjnodes.values())) if len(adjnodes) > 0 else 1.8*mu_dist
             seeds[sid] = (individuals[sid], c, (fitnesses[sid], dists[sid]))
         except:
             seeds[sid] = (individuals[sid], mu_dist, (fitnesses[sid], dists[sid]))

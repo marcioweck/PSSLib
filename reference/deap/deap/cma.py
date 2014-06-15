@@ -75,7 +75,6 @@ class Strategy(object):
     +----------------+---------------------------+----------------------------+
 
     """
-
     def __init__(self, centroid, sigma, **kargs):
         self.params = kargs
         
@@ -101,10 +100,7 @@ class Strategy(object):
         
         self.lambda_ = self.params.get("lambda_", int(4 + 3 * log(self.dim)))
         self.update_count = 0
-        self.eigeneval = 0
         self.computeParams(self.params)
-
-        self.sel_pop = numpy.zeros((self.mu, self.dim))
         
     def generate(self, ind_init):
         """Generate a population of :math:`\lambda` individuals of type
@@ -117,7 +113,7 @@ class Strategy(object):
         arz = numpy.random.standard_normal((self.lambda_, self.dim))
         arz = self.centroid + self.sigma * numpy.dot(arz, self.BD.T)
         return map(ind_init, arz)
-
+        
     def update(self, population):
         """Update the current covariance matrix strategy from the
         *population*.
@@ -126,14 +122,18 @@ class Strategy(object):
                            parameters.
         """
         population.sort(key=lambda ind: ind.fitness, reverse=True)
-        numpy.copyto(self.sel_pop, population[0:self.mu])
         
         old_centroid = self.centroid
-        self.centroid = numpy.dot(self.weights, self.sel_pop)
+        self.centroid = numpy.dot(self.weights, population[0:self.mu])
         
         c_diff = self.centroid - old_centroid
-        self.updateEvolutionPath(c_diff)
-
+        
+        # Cumulation : update evolution path
+        self.ps = (1 - self.cs) * self.ps \
+             + sqrt(self.cs * (2 - self.cs) * self.mueff) / self.sigma \
+             * numpy.dot(self.B, (1. / self.diagD) \
+                          * numpy.dot(self.B.T, c_diff))
+        
         hsig = float((numpy.linalg.norm(self.ps) / 
                 sqrt(1. - (1. - self.cs)**(2. * (self.update_count + 1.))) / self.chiN
                 < (1.4 + 2. / (self.dim + 1.))))
@@ -145,34 +145,17 @@ class Strategy(object):
                   * c_diff
         
         # Update covariance matrix
-        artmp = self.sel_pop - old_centroid
-        self.updateCovarianceMatrix(artmp, hsig)
-        
-        self.sigma *= numpy.exp((numpy.linalg.norm(self.ps) / self.chiN - 1.) \
-                                * self.cs / self.damps)
-
-        if (self.update_count*self.lambda_) - self.eigeneval > self.lambda_ \
-                /(self.ccov1+self.ccovmu)/self.dim/10.:
-            # to achieve O(n^2)
-            self.eigenUpdate()
-
-    def updateEvolutionPath(self, c_diff):
-        # Cumulation : update evolution path
-        self.ps = (1 - self.cs) * self.ps \
-             + sqrt(self.cs * (2 - self.cs) * self.mueff) / self.sigma \
-             * numpy.dot(self.B, (1. / self.diagD) \
-                          * numpy.dot(self.B.T, c_diff))
-
-    def updateCovarianceMatrix(self, artmp, hsig):
+        artmp = population[0:self.mu] - old_centroid
         self.C = (1 - self.ccov1 - self.ccovmu + (1 - hsig) \
                    * self.ccov1 * self.cc * (2 - self.cc)) * self.C \
                 + self.ccov1 * numpy.outer(self.pc, self.pc) \
                 + self.ccovmu * numpy.dot((self.weights * artmp.T), artmp) \
                 / self.sigma**2
-
-    def eigenUpdate(self):
-        self.eigeneval += 1
-
+        
+        
+        self.sigma *= numpy.exp((numpy.linalg.norm(self.ps) / self.chiN - 1.) \
+                                * self.cs / self.damps)
+        
         self.diagD, self.B = numpy.linalg.eigh(self.C)
         indx = numpy.argsort(self.diagD)
         
@@ -215,62 +198,7 @@ class Strategy(object):
         self.damps = 1. + 2. * max(0, sqrt((self.mueff - 1.) / \
                                             (self.dim + 1.)) - 1.) + self.cs
         self.damps = params.get("damps", self.damps)
-
-        self.configStopCriteria()
-
-    def configStopCriteria(self):
-
-        self.conditions = {
-                          "MaxIter" : False, 
-                          "TolHistFun" : False,
-                          "EqualFunVals" : False,
-                          "TolX" : False, 
-                          "TolUpSigma" : False,
-                          "Stagnation" : False,
-                          "ConditionCov" : False, 
-                          "NoEffectAxis" : False,
-                          "NoEffectCoor" : False,
-                          "Converged" : False
-                          }
-
-        self.TOLUPSIGMA = 10**20
-        self.CONDITIONCOV = 10**14
-        self.EQUALFUNVALS = 1. / 3.
-        self.TOLX = 10**-12
-        self.MAXITER = 1000
-
-    def shouldContinue(self):
-
-        centroid = self.centroid
-        sgm = self.sigma
-
-        NOEFFECTAXIS_INDEX = self.update_count % self.dim
-
-        # if self.update_count >= self.MAXITER:
-            # The maximum number of iteration per CMA-ES ran
-            # self.conditions["MaxIter"] = True
-
-        if all(self.pc < self.TOLX) and all(numpy.sqrt(numpy.diag(self.C)) < self.TOLX):
-            # All components of pc and sqrt(diag(C)) are smaller than the threshold
-            self.conditions["TolX"] = True
-
-        if self.cond > self.CONDITIONCOV:
-            # The condition number is bigger than a threshold
-            self.conditions["ConditionCov"] = True
-
-        if all(centroid == centroid + 0.1 * sgm * self.diagD[-NOEFFECTAXIS_INDEX] * self.B[-NOEFFECTAXIS_INDEX]):
-            # The coordinate axis std is too low
-            self.conditions["NoEffectAxis"] = True
-
-        if any(centroid == centroid + 0.2 * sgm * numpy.diag(self.C)):
-            # The main axis std has no effect
-            self.conditions["NoEffectCoor"] = True
-
-        if any(self.conditions.values()):
-            print [key for key,v in self.conditions.iteritems() if v]
-        return not any(self.conditions.values())
-
-
+        
 class StrategyOnePlusLambda(object):
     """
     A CMA-ES strategy that uses the :math:`1 + \lambda` paradigme.
