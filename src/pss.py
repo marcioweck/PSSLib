@@ -114,7 +114,7 @@ def remove_overlaps(feval, individuals, hives):
     idx.sort(key=lambda i: individuals[i].fitness)
 
     nm = np.sqrt(len(individuals[0]))
-    
+
     covs = [h.sigma*nm for h in hives]
 
     D = squareform(pdist(individuals))
@@ -162,7 +162,7 @@ creator.create("Hive", cma.Strategy)
 
 def main():
 
-    benchmark = pycec2013.Benchmark(10)
+    benchmark = pycec2013.Benchmark(16)
 
     lbounds = tuple(benchmark.get_lbounds())
     ubounds = tuple(benchmark.get_ubounds())
@@ -185,25 +185,26 @@ def main():
     max_ngoptima = benchmark.ngoptima
 
     def similarity_func(a, b):
-        if np.isnan(np.sum(a)) or np.isnan(np.sum(b)): 
+        if np.isnan(np.sum(a)) or np.isnan(np.sum(b)):
             pdb.set_trace()
 
         d = euclidean(a, b)
         return d < 0.06
-    
+
     hof = Archive(max_ngoptima, similarity_func)
 
     distribs = [stats.uniform for i in range(dim)]
 
-    samples = sampler(distribs, (min_, max_), dim, 20*dim)
+    samples = sampler(distribs, (min_, max_), dim, 40*dim)
 
     #samples = np.loadtxt("/home/weckwar/inputs.txt", delimiter=',', ndmin=2)
 
-    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10, useDM=False)
-    # tosave = np.array( [(x, c) for x,c,_ in seeds])
+    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10, useDM=True, maskmode='NEA1')
+    #tosave = np.array( [x for x,c,_ in seeds])
+    #print len(tosave)
     # np.savetxt("/home/weckwar/inputs.txt", tosave, delimiter=',')
-    # plotseeds(benchmark.evaluate, min_, max_, dim, seeds=seeds)
-    # return 
+    #plotseeds(benchmark.evaluate, min_, max_, dim, samples=tosave)
+    #return
 
     hives = list()
     norm = float(np.sqrt(dim))
@@ -215,7 +216,7 @@ def main():
     while leftfes > 0  and ngoptima < max_ngoptima:
 
         swarms = toolbox.generate(hives)
-        
+
         blob = list(chain(*swarms))
         D = squareform(pdist(blob))
         fitnesses = toolbox.feval(blob)
@@ -225,11 +226,11 @@ def main():
             k = i*nelem
             nbidx = np.arange(k, k+nelem)
             for j, ind in enumerate(swarm):
-                D[k+j,nbidx] = np.inf                
+                D[k+j,nbidx] = np.inf
                 sortedline = np.argsort(D[k+j,:])
                 bestidx = next((l for l in sortedline
                                 if fitnesses[l] > fitnesses[k+j]), -1)
-                
+
                 ind.fitness.values = (fitnesses[k+j], D[k+j, bestidx])
 
         checks = toolbox.update(hives, swarms)
@@ -250,7 +251,7 @@ def main():
         hfit = [x.fitness.values[0] for x in hof]
 
         ngoptima = benchmark.count_goptima(hof, hfit, 1e-5)
-        
+
         if len(hives) < nmin:
             print "entered"
             samples = sampler(distribs, (min_, max_), dim, 20*dim)
@@ -264,14 +265,14 @@ def main():
 
             leftfes -= len(samples)
 
-        leftfes -= len(swarms)*nelem + len(xstarts)      
+        leftfes -= len(swarms)*nelem + len(xstarts)
 
     print "Used FEs: {0}".format(benchmark.max_fes - leftfes)
     print ngoptima
     for ind in hof:
         print "x: {0} -> {1}".format(ind, ind.fitness.values[0])
     plotseeds(benchmark.evaluate, min_, max_, dim, samples=hof)
-   
+
 
 def plotseeds(feval, min_, max_, dim, samples=None, edges=None, seeds=None):
     fig, ax = plt.subplots()
@@ -296,7 +297,7 @@ def plotseeds(feval, min_, max_, dim, samples=None, edges=None, seeds=None):
             plt.scatter(sarr[:, 0], sarr[:, 1], c='r', s=100)
 
         if seeds is not None:
-            for x, r in seeds: 
+            for x, r in seeds:
                 c = mpatches.Circle(x, r, alpha=0.6, fc="b", ec="b", lw=1)
                 ax.add_patch(c)
 
@@ -313,7 +314,7 @@ def plotseeds(feval, min_, max_, dim, samples=None, edges=None, seeds=None):
             for x, r, _ in seeds:
                 c = mpatches.Circle((x, feval(x)), r, alpha=0.6, fc="b", ec="b", lw=1)
                 ax.add_patch(c)
-    
+
     plt.show()
 
 if __name__ == "__main__":

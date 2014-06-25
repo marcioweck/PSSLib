@@ -80,7 +80,14 @@ def adj_tree_plugin(edges):
     return stree
 
 
-def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
+def beta_plugin(nsamples, ndim):
+    D2 = ndim**2
+    S = nsamples
+
+    return ((-4.69e-4 * D2 + 0.0263*ndim + 3.66/ndim - 0.457) * np.log10(S)
+            + 7.51e-4 * D2 - 0.0421*ndim - 2.26/ndim + 1.83)
+
+def raw_data_seeds_sel(feval, individuals, nmin, useDM=True, maskmode='NEA1'):
     """
     raw_data_seeds_sel selects seeds (good starting points) from
     a numpy.array matrix NxM with N individuals with M dimensions
@@ -95,13 +102,26 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
 
     stree = adj_tree_plugin(edges)
 
-    dists = [d for _, d in edges]
+    dists = np.array([d for _, d in edges])
     np.arange(0, len(dists))
     mu_dist = np.mean(dists)
 
     seeds = dict()
+    beta = beta_plugin(len(individuals), len(individuals[0]))
     # Select the main seeds
     mask = ((dists >= 2.*mu_dist) + (dists == 0))
+    if maskmode == 'NEA2':
+        for k, adj in stree.iteritems():
+            # print "log:"
+            # print 'k {0}'.format(k)
+            # print 'nadjs {0}'.format(len(adj))
+            # print 'calc {0}'.format(edges[k][1]/np.median(adj.values()))
+            # print 'beta {0}'.format(beta)
+            # print
+            # print
+            if len(adj) >= 3 and edges[k][1]/np.median(adj.values()) > beta:
+                # pdb.set_trace()
+                mask[k] |= 1
 
     sidxs = _idxs[mask]
     for sid in sidxs:
@@ -117,5 +137,5 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True):
             seeds[i] = (individuals[i], 0.6*d, (fitnesses[i], d))
             if j in seeds:
                 seeds[j] = (individuals[j], 0.6*d, (fitnesses[j], dists[j]))
-        
+
     return seeds.values(), edges
