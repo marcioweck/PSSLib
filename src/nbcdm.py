@@ -47,7 +47,7 @@ def nbtree(population, fitnesses):
     D = squareform(pdist(population))
     return nearest_better_tree(D, fitnesses)
 
-
+# TODO consertar...gerando sem parar
 def dm_plugin(feval, fitnesses, population, edges, seeds, mask, nmin):
     global _idxs
     # Random search
@@ -67,6 +67,29 @@ def dm_plugin(feval, fitnesses, population, edges, seeds, mask, nmin):
 
         if len(seeds) >= nmin:
                 break
+
+
+def dm_adjacent_plugin(feval, individuals, ind_fits, sidx, stree, edges):
+    global _idxs
+
+    interior_pts = dm.inline_geom_sampler(5)
+
+    for sid in sidx:
+        try:
+            childs = stree[sid]
+            idbest = None
+            dbest = -1
+            for c, d in childs.iteritems():
+                wps = dm.denorm(individuals[c], individuals[sid], interior_pts)
+                wpfit = np.array(map(feval, wps))
+
+                if any(wpfit < ind_fits[c]):
+                    if d > dbest:
+                        idbest = c
+            if idbest is not None:
+                yield edges[idbest]
+        except:
+            pass # seed without adjacent edges...continue
 
 
 def adj_tree_plugin(edges):
@@ -123,7 +146,7 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True, maskmode='NEA1'):
                 # pdb.set_trace()
                 mask[k] |= 1
 
-    sidxs = _idxs[mask]
+    sidxs = set(_idxs[mask])
     for sid in sidxs:
         try:
             adjnodes = stree[sid]
@@ -133,9 +156,26 @@ def raw_data_seeds_sel(feval, individuals, nmin, useDM=True, maskmode='NEA1'):
             seeds[sid] = (individuals[sid], mu_dist, (fitnesses[sid], dists[sid]))
 
     if useDM and len(seeds) < nmin:
-        for (i,j), d in dm_plugin(feval, fitnesses, individuals, edges, seeds, -mask, nmin):
-            seeds[i] = (individuals[i], 0.6*d, (fitnesses[i], d))
-            if j in seeds:
-                seeds[j] = (individuals[j], 0.6*d, (fitnesses[j], dists[j]))
+        # for (i,j), d in dm_plugin(feval, fitnesses, individuals, edges, seeds, -mask, nmin):
+        #     seeds[i] = (individuals[i], 0.6*d, (fitnesses[i], d))
+        #     if j in seeds:
+        #         seeds[j] = (individuals[j], 0.6*d, (fitnesses[j], dists[j]))
+
+        stmp = sidxs
+        loop = True
+        while loop:
+            sout = set()
+            for (i,j), d in dm_adjacent_plugin(feval, individuals, fitnesses, stmp, stree, edges):
+                sout.add(i)
+                seeds[i] = (individuals[i], 0.6*d, (fitnesses[i], d))
+                if j in seeds:
+                    seeds[j] = (individuals[j], 0.6*d, (fitnesses[j], dists[j]))
+
+                if len(seeds) >= nmin:
+                    loop = False
+                    break
+            if len(sout) == 0:
+                loop = False
+            stmp = sout
 
     return seeds.values(), edges

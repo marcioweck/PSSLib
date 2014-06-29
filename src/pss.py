@@ -25,6 +25,7 @@ import dm
 import lhs
 import nbcdm
 from archive import Archive
+from utils import solowPolaskyQC, averageFitnessQC, ensure_bounds
 
 """
 Utils
@@ -46,57 +47,6 @@ def sampler(dist_engine, xbounds, dim, n, convert=False):
             P = np.array([np.array((x,)) for x in P])
 
     return P
-
-
-def ensure_bounds(lbounds, ubounds):
-    rand_ = random.random
-    def decorator(func):
-        def wrappper(*args, **kargs):
-            populations = func(*args, **kargs)
-            for pop in populations:
-                for ind in pop:
-                    for i in range(len(ind)):
-                        if ind[i] > ubounds[i]:
-                            ind[i] = ubounds[i]
-
-                        elif ind[i] < lbounds[i]:
-                            ind[i] = lbounds[i]
-            return populations
-        return wrappper
-    return decorator
-
-
-def nearest_better_tree(X, fitness, copy_X=False, marker=0.0):
-    """X are edge weights of fully connected graph"""
-    if copy_X:
-        X = X.copy()
-
-    if X.shape[0] != X.shape[1]:
-        raise ValueError("X needs to be square matrix of edge weights")
-
-    n_vertices = X.shape[0]
-    spanning_edges = []
-
-    # exclude self connections:
-    diag_indices = np.arange(n_vertices)
-    X[diag_indices, diag_indices] = np.inf
-
-    for i in xrange(n_vertices):
-        sortedline = np.argsort(X[i])
-        xid = next((j for j in sortedline if fitness[j] > fitness[i]), -1)
-
-        if xid < 0:
-            spanning_edges.append(((i, i), marker))
-            continue  # go to the next
-
-        new_edge = ((i, xid), X[i, xid])
-        spanning_edges.append(new_edge)
-
-        # remove all edges inside current tree
-        X[i, xid] = np.inf
-        X[xid, i] = np.inf
-
-    return spanning_edges
 
 
 """
@@ -153,6 +103,7 @@ from framework import pycec2013
 
 import cma
 
+
 creator.create("Fitness", base.Fitness, weights=(1.0, 1.0))
 creator.create("OneFitness", base.Fitness, weights=(1.0,))
 creator.create("Individual", array.array, typecode='d', fitness=creator.Fitness)
@@ -162,7 +113,7 @@ creator.create("Hive", cma.Strategy)
 
 def main():
 
-    benchmark = pycec2013.Benchmark(16)
+    benchmark = pycec2013.Benchmark(17)
 
     lbounds = tuple(benchmark.get_lbounds())
     ubounds = tuple(benchmark.get_ubounds())
@@ -173,7 +124,7 @@ def main():
     toolbox.register("generate", generate, creator.Individual)
     toolbox.register("update", map, updateHive)
     toolbox.register("feval", map, benchmark.evaluate)
-    toolbox.register("fdist", nearest_better_tree)
+    # toolbox.register("fdist", nearest_better_tree)
     toolbox.register("hive", generateHive, cma.Strategy)
     toolbox.register("bounds", ensure_bounds(lbounds, ubounds))
     toolbox.decorate("generate", toolbox.bounds)
@@ -195,23 +146,34 @@ def main():
 
     distribs = [stats.uniform for i in range(dim)]
 
-    samples = sampler(distribs, (min_, max_), dim, 40*dim)
+    samples = sampler(distribs, (min_, max_), dim, 20*dim)
 
     #samples = np.loadtxt("/home/weckwar/inputs.txt", delimiter=',', ndmin=2)
 
-    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10, useDM=True, maskmode='NEA1')
-    #tosave = np.array( [x for x,c,_ in seeds])
-    #print len(tosave)
-    # np.savetxt("/home/weckwar/inputs.txt", tosave, delimiter=',')
-    #plotseeds(benchmark.evaluate, min_, max_, dim, samples=tosave)
+    seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 20, useDM=True, maskmode='NEA1')
+    # xpoints = np.array([x for x,c,_ in seeds])
+    # np.savetxt("/home/weckwar/inputs.txt", xpoints, delimiter=',')
+    #plotseeds(benchmark.evaluate, min_, max_, dim, samples=xpoints)
     #return
 
     hives = list()
+    population = list()
     norm = float(np.sqrt(dim))
     for (xstart, c, (f1, f2)) in seeds:
         ind = creator.Individual(xstart)
         ind.fitness.values = (f1, f2)
+        population.append(ind)
         hives.append(toolbox.hive((ind, c/norm)))
+
+    verbose = True
+
+    logbook = tools.Logbook()
+    logbook.header = "gen", "nswarm", "ngoptima", "muerror", "dispersion"
+
+    generation = 0
+    logbook.record(gen=generation, nswarm=len(hives), ngoptima=ngoptima,
+                   muerror=averageFitnessQC(population),
+                   dispersion=solowPolaskyQC(population, 1.0/dim))
 
     while leftfes > 0  and ngoptima < max_ngoptima:
 
@@ -245,18 +207,16 @@ def main():
         uniques = list(remove_overlaps(benchmark.evaluate, xstarts, nextgen))
         hives = [nextgen[i] for i in uniques]
         xstarts = [xstarts[i]  for i in uniques]
-        # cfit = [cfit[i] for i in uniques]
 
         hof.update(xstarts)
         hfit = [x.fitness.values[0] for x in hof]
 
         ngoptima = benchmark.count_goptima(hof, hfit, 1e-5)
 
-        if len(hives) < nmin:
-            print "entered"
-            samples = sampler(distribs, (min_, max_), dim, 20*dim)
+        if len(hives) < 2:
+            samples = sampler(distribs, (min_, max_), dim, 2.*dim)
 
-            seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10)
+            seeds, _ = nbcdm.raw_data_seeds_sel(benchmark.evaluate, samples, 10.)
 
             for (xstart, c, (f1, f2)) in seeds:
                 ind = creator.Individual(xstart)
@@ -266,6 +226,12 @@ def main():
             leftfes -= len(samples)
 
         leftfes -= len(swarms)*nelem + len(xstarts)
+
+        generation += 1
+        logbook.record(gen=generation, nswarm=len(hives), ngoptima=ngoptima,
+                   muerror=0,#averageFitnessQC(xstarts),
+                   dispersion=0)#solowPolaskyQC(xstarts, 1.0/dim))
+        print logbook.stream
 
     print "Used FEs: {0}".format(benchmark.max_fes - leftfes)
     print ngoptima
